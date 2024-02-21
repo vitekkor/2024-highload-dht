@@ -18,6 +18,8 @@ import ru.vk.itmo.dao.Config;
 import ru.vk.itmo.dao.Dao;
 import ru.vk.itmo.dao.Entry;
 import ru.vk.itmo.test.viktorkorotkikh.dao.LSMDaoImpl;
+import ru.vk.itmo.test.viktorkorotkikh.dao.exceptions.LSMDaoOutOfMemoryException;
+import ru.vk.itmo.test.viktorkorotkikh.dao.exceptions.TooManyFlushesException;
 import ru.vk.itmo.test.viktorkorotkikh.http.LSMConstantResponse;
 import ru.vk.itmo.test.viktorkorotkikh.http.LSMCustomSession;
 import ru.vk.itmo.test.viktorkorotkikh.http.LSMServerResponseWithMemorySegment;
@@ -89,7 +91,7 @@ public class LSMServerImpl extends HttpServer {
         // validate id parameter
         String id = request.getParameter("id=");
         if (id == null || id.isEmpty()) {
-            session.sendResponse(new Response(Response.BAD_REQUEST, Response.EMPTY));
+            session.sendResponse(LSMConstantResponse.badRequest(request));
             return;
         }
 
@@ -103,7 +105,12 @@ public class LSMServerImpl extends HttpServer {
     }
 
     private Response handleGetEntity(final Request request, final String id) {
-        final Entry<MemorySegment> entry = dao.get(fromString(id));
+        final Entry<MemorySegment> entry;
+        try {
+            entry = dao.get(fromString(id));
+        } catch (UncheckedIOException e) {
+            return LSMConstantResponse.serviceUnavailable(request);
+        }
         if (entry == null || entry.value() == null) {
             return LSMConstantResponse.notFound(request);
         }
@@ -120,7 +127,13 @@ public class LSMServerImpl extends HttpServer {
                 fromString(id),
                 MemorySegment.ofArray(request.getBody())
         );
-        dao.upsert(newEntry);
+        try {
+            dao.upsert(newEntry);
+        } catch (LSMDaoOutOfMemoryException e) {
+            return LSMConstantResponse.entityTooLarge(request);
+        } catch (TooManyFlushesException e) {
+            return LSMConstantResponse.tooManyRequests(request);
+        }
 
         return LSMConstantResponse.created(request);
     }
@@ -130,7 +143,13 @@ public class LSMServerImpl extends HttpServer {
                 fromString(id),
                 null
         );
-        dao.upsert(newEntry);
+        try {
+            dao.upsert(newEntry);
+        } catch (LSMDaoOutOfMemoryException e) {
+            return LSMConstantResponse.entityTooLarge(request);
+        } catch (TooManyFlushesException e) {
+            return LSMConstantResponse.tooManyRequests(request);
+        }
 
         return LSMConstantResponse.accepted(request);
     }
@@ -148,7 +167,7 @@ public class LSMServerImpl extends HttpServer {
 
     @Override
     public void handleDefault(Request request, HttpSession session) throws IOException {
-        session.sendResponse(new Response(Response.BAD_REQUEST, Response.EMPTY));
+        session.sendResponse(LSMConstantResponse.badRequest(request));
     }
 
     @Override
